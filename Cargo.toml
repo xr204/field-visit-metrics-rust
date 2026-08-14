@@ -1,0 +1,14 @@
+[package]
+name = "field-visit-metrics"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "field_visit_metrics"
+path = "src/lib.rs"
+
+[[bin]]
+name = "report-field-visit"
+path = "src/bin/report_field_visit.rs"
+
