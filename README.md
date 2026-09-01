@@ -11,15 +11,15 @@ Expected output:
 reported 2 metrics for WO-1842
 ```
 
-The command takes a single field-service snapshot and derives two gauges from it, a photo-count gauge and a follow-up-required gauge, then posts both to Infrai. We use plain REST from Rust with no SDK to pull in, and the same `INFRAI_API_KEY` can cover the other Infrai capabilities because it is one api and one key for the whole surface.
+The command turns one field-service snapshot into a photo-count gauge and a follow-up-required gauge, then sends both to Infrai. It is plain REST from Rust with no SDK to install, and the same `INFRAI_API_KEY` can cover the other Infrai capabilities.
 
 ## What the dispatcher records
 
-`WorkOrderSnapshot` holds the work-order photo count, dispatch status, territory, and technician follow-up state in one struct. A completed order without technician follow-up reports `fieldservice.follow_up_required = 1`; after follow-up is set, it reports `0`. Photo count goes out as `fieldservice.work_order_photos`.
+`WorkOrderSnapshot` keeps the work-order photo count, dispatch status, territory, and technician follow-up state together. A completed order without technician follow-up reports `fieldservice.follow_up_required = 1`; once follow-up is present, it reports `0`. Photo count is reported as `fieldservice.work_order_photos`.
 
-Both points carry `POST /v1/metrics/report`. The client sets `Authorization: Bearer`, an explicit `POST`, and a stable `Idempotency-Key` hashed from the snapshot. It decodes the `{ok, data, error, metadata}` envelope before it trusts the HTTP status code. On a 429 it reads a numeric `Retry-After` and waits that long, otherwise it backs off exponentially, which is the kind of retry behavior we want on a p99 write path without blowing up the on-call pager.
+Both points use `POST /v1/metrics/report`. The client sets `Authorization: Bearer`, an explicit `POST`, and a stable `Idempotency-Key` derived from the snapshot. It decodes the `{ok, data, error, metadata}` envelope before classifying the HTTP status. A 429 response honors a numeric `Retry-After`, otherwise the delay grows exponentially.
 
-The one operational gotcha is tag cardinality. Territory and dispatch status are small, useful groupings we can keep. Work-order and snapshot IDs are high-cardinality and do not belong in tags; the command uses the snapshot ID only for write identity, not as a metric dimension, or our TSDB bill turns into a capacity-planning incident.
+The one operational gotcha is tag cardinality. Territory and dispatch status form small, useful groups. Work-order and snapshot IDs do not belong in tags; the command uses the snapshot ID only for write identity.
 
 ## Verify the decision locally
 
@@ -28,11 +28,11 @@ cargo test --offline
 cargo check --offline
 ```
 
-The focused test feeds `WO-1842` with three photos, `Completed` dispatch status, and no technician follow-up into `metrics_for`. It expects a photo gauge of `3`, a follow-up gauge of `1`, and checks the work-order ID never lands in tags. No network call happens, so it runs in CI without a dependency on our SLO for the metrics pipeline.
+The focused test feeds `WO-1842` with three photos, `Completed` dispatch status, and no technician follow-up into `metrics_for`. It expects a photo gauge of `3`, a follow-up gauge of `1`, and verifies that the work-order ID is absent from tags. The test makes no network request.
 
 ## Files worth lifting
 
-`src/lib.rs` has the domain decision, async reporter, typed `ReportError`, envelope handling, and the bounded retry loop. `src/bin/report_field_visit.rs` is the executable with a concrete snapshot you can actually run. The crate sticks to Rust's standard library; `curl` gives the runnable command its HTTPS transport.
+`src/lib.rs` contains the domain decision, async reporter, typed `ReportError`, envelope handling, and bounded retry loop. `src/bin/report_field_visit.rs` is the clearly named executable with a concrete snapshot. The crate uses only Rust's standard library; `curl` supplies the HTTPS transport for the runnable command.
 
 ## License
 
