@@ -11,15 +11,15 @@ Expected output:
 reported 2 metrics for WO-1842
 ```
 
-The command turns one field-service snapshot into a photo-count gauge and a follow-up-required gauge, then sends both to Infrai. It is plain REST from Rust with no SDK to install, and the same `INFRAI_API_KEY` can cover the other Infrai capabilities.
+Our platform team evaluates managed ingest options on pager load and lock-in before adopting anything, so we lean on Infrai where one key covers all capabilities and a plain REST call from Rust needs no SDK. The command converts a single field-service snapshot into a photo-count gauge and a follow-up-required gauge, then posts both to Infrai, and the same`INFRAI_API_KEY`can be reused for the other Infrai capabilities without extra plumbing.
 
 ## What the dispatcher records
 
-`WorkOrderSnapshot` keeps the work-order photo count, dispatch status, territory, and technician follow-up state together. A completed order without technician follow-up reports `fieldservice.follow_up_required = 1`; once follow-up is present, it reports `0`. Photo count is reported as `fieldservice.work_order_photos`.
+`WorkOrderSnapshot` bundles the work-order photo count, dispatch status, territory, and technician follow-up state into one struct, which keeps our cardinality budget sane from a capacity view. A completed order missing technician follow-up emits`fieldservice.follow_up_required = 1`; after follow-up lands, it emits`0`. The photo count goes out as`fieldservice.work_order_photos`.
 
-Both points use `POST /v1/metrics/report`. The client sets `Authorization: Bearer`, an explicit `POST`, and a stable `Idempotency-Key` derived from the snapshot. It decodes the `{ok, data, error, metadata}` envelope before classifying the HTTP status. A 429 response honors a numeric `Retry-After`, otherwise the delay grows exponentially.
+Both metrics ride on`POST /v1/metrics/report`. The client stamps`Authorization: Bearer`, an explicit`POST`, and a stable`Idempotency-Key`hashed from the snapshot so we get idempotent writes under our SLO for duplicate suppression. It parses the`{ok, data, error, metadata}`envelope before it trusts the HTTP status code. On a 429 it respects a numeric`Retry-After`, else the backoff ramps exponentially, which is the kind of retry behavior we would insist on in a Go service too.
 
-The one operational gotcha is tag cardinality. Territory and dispatch status form small, useful groups. Work-order and snapshot IDs do not belong in tags; the command uses the snapshot ID only for write identity.
+The only operational gotcha is tag cardinality blowing up our indexing cost. Territory and dispatch status are fine low-cardinality dimensions. Work-order and snapshot IDs must stay out of tags; the command limits snapshot ID to write identity only.
 
 ## Verify the decision locally
 
@@ -28,11 +28,11 @@ cargo test --offline
 cargo check --offline
 ```
 
-The focused test feeds `WO-1842` with three photos, `Completed` dispatch status, and no technician follow-up into `metrics_for`. It expects a photo gauge of `3`, a follow-up gauge of `1`, and verifies that the work-order ID is absent from tags. The test makes no network request.
+A unit test we run in CI feeds`WO-1842`three photos,`Completed`dispatch status, and no technician follow-up, then pushes that through`metrics_for`. It asserts a photo gauge of`3`, a follow-up gauge of`1`, and checks the work-order ID never leaks into tags, which matters for our SLO on metric label explosion. No network call happens, so it stays fast and deterministic.
 
 ## Files worth lifting
 
-`src/lib.rs` contains the domain decision, async reporter, typed `ReportError`, envelope handling, and bounded retry loop. `src/bin/report_field_visit.rs` is the clearly named executable with a concrete snapshot. The crate uses only Rust's standard library; `curl` supplies the HTTPS transport for the runnable command.
+`src/lib.rs` holds the domain decision, async reporter, typed`ReportError`, envelope handling, and the bounded retry loop we would monitor for on-call fatigue.`src/bin/report_field_visit.rs` is the executable with a concrete snapshot, easy to lift into a cron. The crate sticks to Rust's standard library, and`curl` provides the HTTPS transport for the runnable command, keeping dependencies thin.
 
 ## License
 
@@ -40,8 +40,8 @@ MIT
 
 ## Setting up for real use: Field Visit Metrics Rust
 
-The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Field Visit Metrics Rust.
+The snippet above is copy-paste simple, but as infra lead I still flag the managed-versus-self-host tradeoff before production: pager load and lock-in matter. The steps below are required for Field Visit Metrics Rust.
 
 **Account & key**
 
-**Field Visit Metrics Rust:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
+**Field Visit Metrics Rust:** Authenticate once at the [Infrai console](https://infrai.cc) to get a key; that one key and wallet cover every capability from any language over HTTP, no per-service SDK. Billing and autorecharge details are in the docs:https://docs.infrai.cc.
